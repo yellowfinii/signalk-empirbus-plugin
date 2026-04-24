@@ -107,6 +107,13 @@ module.exports = function(app) {
     options = theOptions
 
     app.on('N2KAnalyzerOut', plugin.listener)
+    plugin.rawListener = (line) => {
+      if (typeof line === 'string' &&
+          (line.includes('1CFF000B') || line.includes('00FF00'))) {
+        processRawEmpirBusLine(line)
+      }
+    }
+    app.on('canboatjs:rawoutput', plugin.rawListener)
     app.setPluginStatus('Waiting for NMEA2000 connect')
 
     app.on('nmea2000OutAvailable', () => {
@@ -119,23 +126,41 @@ module.exports = function(app) {
   }
 
   plugin.listener = (msg) => {
-
     if ( msg.pgn == pgnApiNumber && msg.fields['Manufacturer Code'] == manufacturerCode ) {
-      var state = readData(msg.fields['Data'])
-
-      state.instance--;    // "Receive from network" instance = "Transmit to network" instance + 1
-
-      if ( currentStateByInstance[state.instance] ) {
-        state.restoreDimmingLevels = currentStateByInstance[state.instance].restoreDimmingLevels
-      }
-      app.handleMessage(plugin.id, createDelta(state))
-      currentStateByInstance[state.instance] = state
-      app.setPluginStatus(`EmpirBus instance ${state.instance} status recieved`)
-      app.debug('\nRecieved:\n %O', state)
+      processState(readData(msg.fields['Data']))
     } else if ( msg.pgn == pgnApiNumber ) {
       app.setPluginStatus(`PGN 65280 Manufacturer Code ${msg.fields['Manufacturer Code']} ignored`)
       app.debug('\nPGN 65280 ignored:\n %O', msg)
     }
+  }
+
+  function processState(state) {
+    state.instance--;    // "Receive from network" instance = "Transmit to network" instance + 1
+
+    if ( currentStateByInstance[state.instance] ) {
+      state.restoreDimmingLevels = currentStateByInstance[state.instance].restoreDimmingLevels
+    }
+    app.handleMessage(plugin.id, createDelta(state))
+    currentStateByInstance[state.instance] = state
+    app.setPluginStatus(`EmpirBus instance ${state.instance} status recieved`)
+  }
+
+  function processRawEmpirBusLine(line) {
+    var parts = line.trim().split(/\s+/)
+    if ( parts.length < 11 ) {
+      return
+    }
+
+    if ( parts[2] !== '1CFF000B' ) {
+      return
+    }
+
+    var bytes = parts.slice(3).map(part => parseInt(part, 16))
+    if ( bytes.length < 8 || bytes[0] !== 0x30 || bytes[1] !== 0x99 ) {
+      return
+    }
+
+    processState(readDataBuffer(Buffer.from(bytes.slice(2))))
   }
 
   function createDelta(status) {
@@ -273,6 +298,9 @@ module.exports = function(app) {
 
   plugin.stop = () => {
     app.removeListener('N2KAnalyzerOut', plugin.listener)
+    if (plugin.rawListener) {
+      app.removeListener('canboatjs:rawoutput', plugin.rawListener)
+    }
     onStop.forEach(f => f())
   }
 
