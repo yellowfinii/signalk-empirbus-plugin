@@ -72,6 +72,7 @@
 // body: JSON.stringify({value: value})
 
 
+
 // const debug = require("debug")("signalk-empirbusnxt") Debug handled by Signal K Server
 const path = require('path')
 const Concentrate2 = require("concentrate2");
@@ -80,6 +81,7 @@ const Int64LE = require('int64-buffer').Int64LE
 const _ = require('lodash')
 
 const manufacturerCode = "Empir Bus" // According to http://www.nmea.org/Assets/20140409%20nmea%202000%20registration%20list.pdf
+const manufacturerCodeNumeric = 304  // Newer EmpirBus Devices (MCU v2 Differences)
 const pgnApiNumber = 65280 // NMEA2000 Proprietary PGN 65280 – Single Frame, Destination Address Global
 const pgnIsoNumber = 059904 // NMEA 2000 ISO request PGN 059904 - Single Frame, Destination Address Global
 const pgnAddress = 255 // Device to send to, 255 = global address, used for sending addressed messages to all nodes
@@ -128,6 +130,25 @@ module.exports = function(app) {
   plugin.listener = (msg) => {
     if ( msg.pgn == pgnApiNumber && msg.fields['Manufacturer Code'] == manufacturerCode ) {
       processState(readData(msg.fields['Data']))
+
+    if (        // adding Numerical Code identifier
+  msg.pgn == pgnApiNumber &&
+    (
+    msg.fields['Manufacturer Code'] == manufacturerCode ||
+    msg.fields['Manufacturer Code'] == manufacturerCodeNumeric
+    )
+  ) {     
+      var state = readData(msg.fields['Data'])
+
+      state.instance--;    // "Receive from network" instance = "Transmit to network" instance + 1
+
+      if ( currentStateByInstance[state.instance] ) {
+        state.restoreDimmingLevels = currentStateByInstance[state.instance].restoreDimmingLevels
+      }
+      app.handleMessage(plugin.id, createDelta(state))
+      currentStateByInstance[state.instance] = state
+      app.setPluginStatus(`EmpirBus instance ${state.instance} status recieved`)
+      app.debug('\nRecieved:\n %O', state)
     } else if ( msg.pgn == pgnApiNumber ) {
       app.setPluginStatus(`PGN 65280 Manufacturer Code ${msg.fields['Manufacturer Code']} ignored`)
       app.debug('\nPGN 65280 ignored:\n %O', msg)
