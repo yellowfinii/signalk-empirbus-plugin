@@ -15,7 +15,7 @@
  */
 
 // Key path according to EmpirBus Application Specific PGN 65280 Data Model 2 (2x word + 8x bit) per instance:
-// 2x dimmer dimmingLevel 0 = 0% .. 1000 = 100%,
+// 2x dimmer level 0 = 0% .. 1000 = 100%,
 // 8x switch states true = on / false = off
 // First two switches represent the state of the two dimmers
 //
@@ -25,14 +25,14 @@
 //
 // EmpirBus API PGN component connectors are numbered Word 1..2 + Bit 1..8.
 // To avoid confusion Signal K device names are numbered accordingly starting from 1, not from 0
-// electrical.switches.empirBusNxt-instance<NXT component instance 0..49>-dimmer<#1..2>.dimmingLevel
-// electrical.switches.empirBusNxt-instance<NXT component instance 0..49>-switch<#1..8>.state
+// electrical.switches.empirbus.<instance 0..49>.<device 1..8>.level
+// electrical.switches.empirbus.<instance 0..49>.<device 1..8>.state
 // The first two switches represent the state of the two dimmers
 //
-// Signak K API keys for EmpirBus NXT devices:
+// Signal K API keys for EmpirBus devices:
 // electrical/switches/<identifier>
 // electrical/switches/<identifier>/state  (true|false)
-// electrical/switches/<identifier>/dimmingLevel  (0..1)
+// electrical/switches/<identifier>/level  (0..1)
 // electrical/switches/<identifier>/type   (switch | dimmer)
 //
 // electrical/switches/<identifier>/state/meta/units (bool)
@@ -40,9 +40,9 @@
 // electrical/switches/<identifier>/state/meta/associatedDevice/instance (Technical device address: Instance in EmpirBus API)
 // electrical/switches/<identifier>/state/meta/associatedDevice/device (Technical device address: Device in instance in EmpirBus API e.g. "switch 1" or "dimmer 1")
 //
-// electrical/switches/<identifier>/dimmingLevel/meta/units (ratio)
-// electrical/switches/<identifier>/dimmingLevel/meta/description": "Dimmer brightness ratio, 0<=ratio<=1, 1 is 100%"
-// electrical/switches/<identifier>/dimmingLevel/meta/displayName   (System name of brightness, e.g. "Switch 0.8 brightness")
+// electrical/switches/<identifier>/level/meta/units (ratio)
+// electrical/switches/<identifier>/level/meta/description": "Dimmer brightness ratio, 0<=ratio<=1, 1 is 100%"
+// electrical/switches/<identifier>/level/meta/displayName   (System name of brightness, e.g. "Switch 0.8 brightness")
 //
 // REMOVED: electrical/switches/<identifier>/name   (System name of control, e.g. Switch 0.8)
 //
@@ -59,20 +59,20 @@
 //
 //
 // <identifier> is the device identifier, concattenated from the name of digital switching system and a system plugin proprietary decive address (systemname-deviceaddress),
-// e.g. for EmpirBus NXT devices this is empirBusNxt-instance<instance>-dimmer|switch<#>
-// <instance> is the instance of the respective “Receive from network” EmpirBus NXT API component for 3rd party communication 0..49
-// <#> is the ID of the dimmer (1..2) or switch (1..8)
+// e.g. for EmpirBus devices this is empirbus.<instance>.<device>
+// <instance> is the instance of the respective “Receive from network” EmpirBus API component for 3rd party communication 0..49
+// <device> is the connector number in the EmpirBus API component
 // state is state of switch or dimmer 'on' or 'off'
-// dimmingLevel is the dimming value of dimmer from 0.000 to 1.000 (decimal)
-// associatedDevice is the address of device proprietary to the plugin and digital switching system, e.g. for EmpirBus NXT {"instance":0,"switch":1} or {"instance":0,"dimmer":1}
+// level is the dimming value of dimmer from 0.000 to 1.000 (decimal)
+// associatedDevice is the address of device proprietary to the plugin and digital switching system, e.g. for EmpirBus {"instance":0,"switch":1} or {"instance":0,"dimmer":1}
 
-// Values to send to device are expected via PUT method at: electrical/switches/<identifier>/state|dimmingLevel
-// e.g. electrical/switches/empirBusNxt-instance0-dimmer0/dimmingLevel
+// Values to send to device are expected via PUT method at: electrical/switches/<identifier>/state|level
+// e.g. electrical/switches/empirbus/0/1/level
 // body: {value:0.75}
 // body: JSON.stringify({value: value})
 
 
-// const debug = require("debug")("signalk-empirbusnxt") Debug handled by Signal K Server
+// const debug = require("debug")("signalk-empirbus") Debug handled by Signal K Server
 const path = require('path')
 const Concentrate2 = require("concentrate2");
 const Bitfield = require("bitfield")
@@ -83,28 +83,27 @@ const manufacturerCode = "Empir Bus" // According to http://www.nmea.org/Assets/
 const pgnApiNumber = 65280 // NMEA2000 Proprietary PGN 65280 – Single Frame, Destination Address Global
 const pgnIsoNumber = 059904 // NMEA 2000 ISO request PGN 059904 - Single Frame, Destination Address Global
 const pgnAddress = 255 // Device to send to, 255 = global address, used for sending addressed messages to all nodes
-const instancePath = 'electrical.switches' // Key path: electrical.switches.empirBusNxt-instance<NXT component instance 0..49>-switch|dimmer<#1..8>.state
-const switchingIdentifier = 'empirBusNxt'
+const instancePath = 'electrical.switches.empirbus'
 
 const validSwitchValues = [true, false, 'on', 'off', 0, 1]
 
 module.exports = function(app) {
   var plugin = {};
   var onStop = []
-  var options
+  var options = {}
   var empirBusInstance
   var registeredForPut = {}
   var currentStateByInstance = {}
   var knownDevices = []
 
-  plugin.id = 'signalk-empirbus-nxt'
-  plugin.name = 'EmpirBus NXT Control'
-  plugin.description = 'Monitor and control an EmpirBus NXT via EmpirBus Application Specific PGN 65280 using EmpirBus NXT API component for 3rd party communication'
+  plugin.id = 'signalk-empirbus'
+  plugin.name = 'EmpirBus Control'
+  plugin.description = 'Monitor and control an EmpirBus system via EmpirBus Application Specific PGN 65280 using the EmpirBus API component for 3rd party communication'
 
   plugin.start = function(theOptions) {
-    app.debug('Starting: EmpirBus NXT Control')
+    app.debug('Starting: EmpirBus Control')
 
-    options = theOptions
+    options = theOptions || {}
 
     app.on('N2KAnalyzerOut', plugin.listener)
     plugin.rawListener = (line) => {
@@ -166,52 +165,75 @@ module.exports = function(app) {
   function createDelta(status) {
     var values = []
     var meta = []
+    var instanceOptions = getInstanceOptions(status.instance)
+    var expandedMode = isExpandedMode(status.instance)
 
     status.dimmers.forEach((value, index) => {
       var empirbusIndex = index +1   // EmpirBus devices are numbered 1..8, starting with 1
-      var dimmerPath = `${instancePath}.${switchingIdentifier}-instance${status.instance}-dimmer${empirbusIndex}`
-      values.push(
-        {
-          path: `${dimmerPath}.state`,
-          value: status.switches[index] ? true : false
-        },
-        {
-          path: `${dimmerPath}.dimmingLevel`,      // Save even dimmingLevel 0 to create API key in any case
-          value: value / 1000.0
-        },
-        {
-          path: `${dimmerPath}.type`,
-          value: "dimmer"
+      var dimmerPath = `${instancePath}.${status.instance}.${empirbusIndex}`
+      var dimmerDisplayName = getDisplayName(dimmerPath, `${expandedMode ? 'Switch' : 'Dimmer'} ${status.instance}.${empirbusIndex}`)
+      var dimmerControlType = getControlType(dimmerPath, expandedMode ? "switch" : "dimmer")
+
+      if ( isIgnoredPath(dimmerPath) ) {
+        if  (!expandedMode && Number(value)>0 ) {
+          status.restoreDimmingLevels[index] = value
+          app.debug('Dimmer Level saved:', Number(value))
         }
-      )
+        return
+      }
+
+      values.push({
+        path: `${dimmerPath}.state`,
+        value: status.switches[index] ? true : false
+      })
+
+      if ( expandedMode && shouldPublishTypePaths() ) {
+        values.push({
+          path: `${dimmerPath}.type`,
+          value: dimmerControlType
+        })
+      } else if ( expandedMode ) {
+      } else {
+        values.push({
+          path: `${dimmerPath}.level`,      // Save even level 0 to create API key in any case
+          value: value / 1000.0
+        })
+        if ( shouldPublishTypePaths() ) {
+          values.push({
+            path: `${dimmerPath}.type`,
+            value: dimmerControlType
+          })
+        }
+      }
 
       if (!knownDevices.includes(dimmerPath)) {
         knownDevices.push(dimmerPath)
-        meta.push(
-          {
-            path: `${dimmerPath}.state`,
-            value: {
-              units: `bool`,
-              displayName: `Dimmer ${status.instance}.${empirbusIndex}`,
-              associatedDevice: {
-                instance: status.instance,          // Technical address: Instance in EmpirBus API
-                device: `dimmer ${empirbusIndex}`   // Technical address: Device in instance of EmpirBus
-              }
+        meta.push({
+          path: `${dimmerPath}.state`,
+          value: {
+            units: `bool`,
+            displayName: dimmerDisplayName,
+            associatedDevice: {
+              instance: status.instance,          // Technical address: Instance in EmpirBus API
+              device: `${expandedMode ? 'switch' : 'dimmer'} ${empirbusIndex}`
             }
-          },
-          {
-            path: `${dimmerPath}.dimmingLevel`,
+          }
+        })
+
+        if ( !expandedMode ) {
+          meta.push({
+            path: `${dimmerPath}.level`,
             value: {
               units: `ratio`,
               description: `Dimmer brightness ratio, 0<=ratio<=1, 1 is 100%`,
-              displayName: `Dimmer ${status.instance}.${empirbusIndex} brightness`,
+              displayName: `${dimmerDisplayName} brightness`,
               associatedDevice: {
                 instance: status.instance,          // Technical address: Instance in EmpirBus API
                 device: `dimmer ${empirbusIndex}`   // Technical address: Device in instance of EmpirBus
               }
             }
-          }
-        )
+          })
+        }
       }
 
       if ( !registeredForPut[status.instance] && app.registerActionHandler ) {
@@ -222,15 +244,17 @@ module.exports = function(app) {
                                     empirbusIndex: empirbusIndex,
                                     type: 'state'
                                   }))
-        app.registerActionHandler('vessels.self',
-                                  `${dimmerPath}.dimmingLevel`,
-                                  getActionHandler({
-                                    instance: status.instance,
-                                    empirbusIndex: empirbusIndex,
-                                    type: 'dimmerLevel'
-                                  }))
+        if ( !expandedMode ) {
+          app.registerActionHandler('vessels.self',
+                                    `${dimmerPath}.level`,
+                                    getActionHandler({
+                                      instance: status.instance,
+                                      empirbusIndex: empirbusIndex,
+                                      type: 'level'
+                                    }))
+        }
       }
-      if  (Number(value)>0 ) { // Do not save dimmingLevel=0 if dimmer is off, so last dimmingLevel can be restored when switching back on
+      if  (!expandedMode && Number(value)>0 ) { // Do not save level=0 if dimmer is off, so last level can be restored when switching back on
         status.restoreDimmingLevels[index] = value
         app.debug('Dimmer Level saved:', Number(value))
       }
@@ -241,18 +265,27 @@ module.exports = function(app) {
 
       var value = status.switches[index]
       var empirbusIndex = index +1
-      var switchPath = `${instancePath}.${switchingIdentifier}-instance${status.instance}-switch${empirbusIndex}`
+      var switchPath = `${instancePath}.${status.instance}.${empirbusIndex}`
+      var switchDisplayName = getDisplayName(switchPath, `Switch ${status.instance}.${empirbusIndex}`)
+      var switchControlType = getControlType(switchPath, "switch")
+
+      if ( isIgnoredPath(switchPath) ) {
+        continue
+      }
 
       values.push(
         {
           path: `${switchPath}.state`,
           value: value ? true : false
-        },
-        {
-          path: `${switchPath}.type`,
-          value: "switch"
         }
       )
+
+      if ( shouldPublishTypePaths() ) {
+        values.push({
+          path: `${switchPath}.type`,
+          value: switchControlType
+        })
+      }
 
       if (!knownDevices.includes(switchPath)) {
         knownDevices.push(switchPath)
@@ -261,7 +294,7 @@ module.exports = function(app) {
             path: `${switchPath}.state`,
             value: {
               units: `bool`,
-              displayName: `Switch ${status.instance}.${empirbusIndex}`,
+              displayName: switchDisplayName,
               associatedDevice: {
                 instance: status.instance,          // Technical address: Instance in EmpirBus API
                 device: `switch ${empirbusIndex}`   // Technical address: Device in instance of EmpirBus
@@ -280,6 +313,70 @@ module.exports = function(app) {
                                     type: 'state'
                                   }))
       }
+    }
+
+    if ( expandedMode ) {
+      status.dimmers.forEach((wordValue, wordIndex) => {
+        const wordNumber = wordIndex + 1
+
+        for ( var bitIndex = 0; bitIndex < 16; bitIndex++ ) {
+          const bitNumber = bitIndex + 1
+          const channelConfig = getExpandedChannelConfig(instanceOptions, wordNumber, bitNumber)
+
+          if ( channelConfig.enabled === false ) {
+            continue
+          }
+
+          const bitPathSegment = formatExpandedBitPath(bitNumber)
+          const wordBitPath = `${instancePath}.${status.instance}.w${wordNumber}.${bitPathSegment}`
+          const bitValue = ((wordValue >> bitIndex) & 0x01) === 1
+          const channelType = channelConfig.kind || 'switch'
+
+          values.push(
+            {
+              path: `${wordBitPath}.state`,
+              value: bitValue
+            }
+          )
+
+          if ( shouldPublishTypePaths() ) {
+            values.push({
+              path: `${wordBitPath}.type`,
+              value: channelType
+            })
+          }
+
+          if (!knownDevices.includes(wordBitPath)) {
+            knownDevices.push(wordBitPath)
+            meta.push(
+              {
+                path: `${wordBitPath}.state`,
+                value: {
+                  units: `bool`,
+                  displayName: channelConfig.displayName || `Word ${status.instance}.w${wordNumber}.${bitPathSegment}`,
+                  associatedDevice: {
+                    instance: status.instance,
+                    device: `word ${wordNumber} bit ${bitNumber}`
+                  }
+                }
+              }
+            )
+          }
+
+          if ( channelType !== 'indicator' &&
+               !registeredForPut[status.instance] &&
+               app.registerActionHandler ) {
+            app.registerActionHandler('vessels.self',
+                                      `${wordBitPath}.state`,
+                                      getActionHandler({
+                                        instance: status.instance,
+                                        wordIndex: wordIndex,
+                                        bitIndex: bitIndex,
+                                        type: 'wordBit'
+                                      }))
+          }
+        }
+      })
     }
 
     registeredForPut[status.instance] = true
@@ -338,18 +435,35 @@ module.exports = function(app) {
       }
     }
 
-    if ( data.type === 'state' ) {      // maybe I should add: || (data.type === 'dimmerLevel' && value == 0)
+    if ( data.type === 'state' ) {      // maybe I should add: || (data.type === 'level' && value == 0)
       currentState.switches[data.empirbusIndex-1] = (value === true || value === 'on' || value === 1) ? 1 : 0;
-      if (currentState.switches[data.empirbusIndex-1] == 1 && currentState.dimmers[data.empirbusIndex-1] == 0 ) {  // Switching on with dimmingLevel 0 is not possible
+      if (currentState.switches[data.empirbusIndex-1] == 1 && currentState.dimmers[data.empirbusIndex-1] == 0 ) {  // Switching on with level 0 is not possible
         currentState.dimmers[data.empirbusIndex-1] = 1000
       }
-    } else if ( data.type === 'dimmerLevel' )  {
+    } else if ( data.type === 'level' )  {
       if ( value >= 0 && value <= 1 ) {
         currentState.dimmers[data.empirbusIndex-1] = value * 1000
       } else {
         app.setPluginError(`Invalid dimmer level ${value} (Instance ${data.instance})`)
         return { state: 'COMPLETED', statusCode:400, message: `Invalid dimmer level ${value}` }
       }
+    } else if ( data.type === 'wordBit' )  {
+      if ( validSwitchValues.indexOf(value) == -1 ) {
+        app.setPluginError(`Invalid switch value ${value} (Instance ${data.instance})`)
+        return { state: 'COMPLETED', statusCode:400, message: `Invalid switch value ${value}` }
+      }
+
+      const bitValue = (value === true || value === 'on' || value === 1) ? 1 : 0
+      const mask = 1 << data.bitIndex
+      var wordValue = currentState.dimmers[data.wordIndex] || 0
+
+      if ( bitValue === 1 ) {
+        wordValue = wordValue | mask
+      } else {
+        wordValue = wordValue & ~mask
+      }
+
+      currentState.dimmers[data.wordIndex] = wordValue
     }
 
     // Send out to all devices by pgnAddress = 255
@@ -416,7 +530,78 @@ module.exports = function(app) {
   }
 
   plugin.schema = {
-    "description": "This plugin has no settings. Use the Data Browser to check for EmpiBus NXT devices at path electrical.switches.empirBusNxt."
+    type: "object",
+    properties: {
+      general: {
+        type: "object",
+        title: "General",
+        properties: {
+          publishTypePaths: {
+            type: "boolean",
+            title: "Publish .type paths",
+            description: "Include .type values for EmpirBus channels in the Signal K data model",
+            default: true
+          }
+        }
+      },
+      ignoredPaths: {
+        type: "array",
+        title: "Ignored device paths",
+        description: "Ignore specific EmpirBus device paths so they are not emitted or registered for PUT",
+        items: {
+          type: "string"
+        }
+      },
+      instances: {
+        type: "array",
+        title: "Per-instance configuration",
+        items: {
+          type: "object",
+          properties: {
+            transmitInstance: {
+              type: "integer",
+              title: "EmpirBus transmit instance",
+              description: "Use the odd-numbered 'Transmit to network' instance from the EmpirBus API component. Signal K publishes it as transmitInstance - 1.",
+              enum: [
+                1, 3, 5, 7, 9, 11, 13, 15, 17, 19,
+                21, 23, 25, 27, 29, 31, 33, 35, 37, 39,
+                41, 43, 45, 47, 49
+              ],
+              default: 1
+            },
+            mode: {
+              type: "string",
+              title: "Instance mode",
+              enum: ["Data Model 2 - Default", "Data Model 2 - Expanded"],
+              default: "Data Model 2 - Default"
+            },
+            channels: {
+              type: "object",
+              title: "Expanded word-bit channels",
+              description: "Per-channel settings keyed like w1.b01 or w2.b16",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    default: true
+                  },
+                  kind: {
+                    type: "string",
+                    enum: ["switch", "indicator"],
+                    default: "switch"
+                  },
+                  displayName: {
+                    type: "string"
+                  }
+                }
+              }
+            }
+          },
+          required: ["transmitInstance"]
+        }
+      }
+    }
   };
 
   plugin.uiSchema = {
@@ -447,6 +632,71 @@ module.exports = function(app) {
     }
   }
   plugin.readDataBuffer = readDataBuffer
+
+  function getDisplayName(basePath, fallback) {
+    return getConfiguredValue(options.displayNames, basePath, fallback)
+  }
+
+  function getControlType(basePath, fallback) {
+    return getConfiguredValue(options.controlTypes, basePath, fallback)
+  }
+
+  function shouldPublishTypePaths() {
+    if ( options.general &&
+         Object.prototype.hasOwnProperty.call(options.general, 'publishTypePaths') ) {
+      return options.general.publishTypePaths !== false
+    }
+    return options.publishTypePaths !== false
+  }
+
+  function isIgnoredPath(basePath) {
+    return Array.isArray(options.ignoredPaths) && options.ignoredPaths.includes(basePath)
+  }
+
+  function getConfiguredValue(source, key, fallback) {
+    if ( source && Object.prototype.hasOwnProperty.call(source, key) ) {
+      return source[key]
+    }
+    return fallback
+  }
+
+  function getInstanceOptions(instance) {
+    if ( options.instances ) {
+      if ( Array.isArray(options.instances) ) {
+        const match = options.instances.find(entry =>
+          entry && (
+            Number(entry.instance) === Number(instance) ||
+            Number(entry.transmitInstance) === Number(instance) + 1
+          )
+        )
+        return match || {}
+      }
+      return options.instances[String(instance)] || options.instances[instance] || {}
+    }
+    return {}
+  }
+
+  function isExpandedMode(instance) {
+    return getInstanceOptions(instance).mode === 'Data Model 2 - Expanded'
+  }
+
+  function getExpandedChannelConfig(instanceOptions, wordNumber, bitNumber) {
+    const key = `w${wordNumber}.${formatExpandedBitPath(bitNumber)}`
+    const defaults = {
+      enabled: true,
+      kind: 'switch'
+    }
+
+    if ( instanceOptions.channels && instanceOptions.channels[key] ) {
+      return Object.assign({}, defaults, instanceOptions.channels[key])
+    }
+
+    return defaults
+  }
+
+  function formatExpandedBitPath(bitNumber) {
+    return `b${String(bitNumber).padStart(2, '0')}`
+  }
 
   return plugin;
 }
