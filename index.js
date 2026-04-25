@@ -317,6 +317,12 @@ module.exports = function(app) {
 
     var currentState = currentStateByInstance[data.instance]
 
+    if ( !currentState ) {
+      const message = `No current state cached for EmpirBus instance ${data.instance}. Wait for a PGN 65280 status update before sending PUT requests.`
+      app.setPluginError(message)
+      return { state: 'COMPLETED', statusCode: 503, message }
+    }
+
     app.debug('\n')
     // app.debug('Path: %O', path)
     // app.debug('Value: %O', value)
